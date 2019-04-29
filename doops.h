@@ -7,6 +7,31 @@
 #include <inttypes.h>
 #include <string.h>
 
+#ifdef _WIN32
+    #define WITH_SELECT
+    #pragma message ( "Building with SELECT" )
+#else
+#ifdef __linux__
+    #define WITH_EPOLL
+    #pragma message ( "Building with EPOLL" )
+#else
+#if defined(__MACH__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    #define WITH_KQUEUE
+    #pragma message ( "Building with KQUEUE" )
+#else
+    #pragma message ( "WARNING: Cannot determine operating system. Falling back to select." )
+    #define WITH_SELECT
+#endif
+#endif
+#endif
+
+#ifdef WITH_EPOLL
+    #include <sys/epoll.h>
+#endif
+#ifdef WITH_KQUEUE
+    #include <sys/event.h>
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -51,11 +76,14 @@ extern "C" {
     #include <unistd.h>
 #endif
 
+#define DOOPS_READ      0
+#define DOOPS_READWRITE 1
+
 struct doops_loop;
 
 typedef int (*doop_callback)(struct doops_loop *loop, void *userdata);
-typedef int (*doop_io_callback)(struct doops_loop *loop, int fd, void *userdata);
 typedef int (*doop_idle_callback)(struct doops_loop *loop);
+typedef void (*doop_io_callback)(struct doops_loop *loop, int fd);
 
 struct doops_event {
     doop_callback event_callback;
@@ -65,19 +93,45 @@ struct doops_event {
     struct doops_event *next;
 };
 
-struct doops_io_event {
-    doop_io_callback event_callback;
-    int fd;
-    void *user_data;
-    struct doops_io_event *next;
-};
-
 struct doops_loop {
     int quit;
     doop_idle_callback idle;
-    struct doops_io_event *io_events;
     struct doops_event *events;
+    doop_io_callback io_read;
+    doop_io_callback io_write;
+#if defined(WITH_EPOLL) || defined(WITH_KQUEUE)
+    int poll_fd;
+#else
+    int max_fd;
+    // fallback to select
+    fd_set inlist;
+    fd_set outlist;
+    fd_set exceptlist;
+#endif
 };
+
+
+static void _private_loop_init_io(struct doops_loop *loop) {
+    if (!loop)
+        return;
+
+#ifdef WITH_EPOLL
+    if (loop->poll_fd <= 0)
+        loop->poll_fd = epoll_create1(0);
+#else
+#ifdef WITH_KQUEUE
+    if (loop->poll_fd <= 0)
+        loop->poll_fd = kqueue();
+#else
+    if (!loop->max_fd) {
+        FD_ZERO(&loop->inlist);
+        FD_ZERO(&loop->outlist);
+        FD_ZERO(&loop->exceptlist);
+        loop->max_fd = 1;
+    }
+#endif
+#endif
+}
 
 static uint64_t milliseconds() {
     struct timeval tv;
@@ -119,11 +173,74 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, uint64_t in
     return 0;
 }
 
-static int loop_add_io(struct doops_loop *loop, int fd, doop_io_callback callback, void *user_data) {
-    if ((!callback) || (!loop)) {
+static int loop_add_io(struct doops_loop *loop, int fd, int mode) {
+    if ((fd < 0) || (!loop)) {
         errno = EINVAL;
         return -1;
     }
+    _private_loop_init_io(loop);
+#ifdef WITH_EPOLL
+    struct epoll_event event;
+    // supress valgrind warning
+    event.data.u64 = 0;
+    event.data.fd = fd;
+    event.events = EPOLLIN | EPOLLPRI | EPOLLHUP | EPOLLRDHUP | EPOLLET;
+    if (mode)
+        event.events |= EPOLLOUT;
+
+    err = epoll_ctl (loop->poll_fd, EPOLL_CTL_ADD, fd, &event);
+    if ((err) && (errno == EEXIST))
+        err = epoll_ctl (loop->poll_fd, EPOLL_CTL_MOD, fd, &event);
+    if (err)
+        return -1;
+#else
+#ifdef WITH_KQUEUE
+    struct kevent events[2];
+    int nume_vents = 1;
+    EV_SET(&events[0], fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
+    if (mode) {
+        EV_SET(&events[1], fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, 0);
+        num_events = 2;
+    }
+    return kevent(loop->poll_fd, events, num_events, NULL, 0, NULL);
+#else
+    FD_SET(fd, &loop->inlist);
+    FD_SET(fd, &loop->exceptlist);
+    if (mode)
+        FD_SET(fd, &loop->outlist);
+    if (fd >= loop->max_fd)
+        loop->max_fd = fd + 1;
+#endif
+#endif
+    return 0;
+}
+
+static int loop_remove_io(struct doops_loop *loop, int fd) {
+    if ((fd < 0) || (!loop)) {
+        errno = EINVAL;
+        return -1;
+    }
+    _private_loop_init_io(loop);
+#ifdef WITH_EPOLL
+    struct epoll_event event;
+    // supress valgrind warning
+    event.data.u64 = 0;
+    event.data.fd = fd;
+    event.events = 0;
+    return epoll_ctl (loop->poll_fd, EPOLL_CTL_DEL, fd, &event);
+#else
+#ifdef WITH_KQUEUE
+    struct kevent event;
+    EV_SET(&event, fd, EVFILT_READ, EV_DELETE, 0, 0, 0);
+    kevent(loop->poll_fd, &event, 1, NULL, 0, NULL);
+    EV_SET(&event, fd, EVFILT_WRITE, EV_DELETE, 0, 0, 0);
+    kevent(loop->poll_fd, &event, 1, NULL, 0, NULL);
+#else
+    FD_CLR(fd, &loop->inlist);
+    FD_CLR(fd, &loop->exceptlist);
+    FD_CLR(fd, &loop->outlist);
+#endif
+#endif
     return 0;
 }
 
@@ -182,6 +299,16 @@ static int loop_idle(struct doops_loop *loop, doop_idle_callback callback) {
     return 0;
 }
 
+static int loop_io(struct doops_loop *loop, doop_io_callback read_callback, doop_io_callback write_callback) {
+    if (!loop) {
+        errno = EINVAL;
+        return -1;
+    }
+    loop->io_read = read_callback;
+    loop->io_write = write_callback;
+    return 0;
+}
+
 static void _private_loop_remove_events(struct doops_loop *loop) {
     struct doops_event *next_ev;
     while (loop->events) {
@@ -189,13 +316,59 @@ static void _private_loop_remove_events(struct doops_loop *loop) {
         DOOPS_FREE(loop->events);
         loop->events = next_ev;
     }
+}
 
-    struct doops_io_event *next_io_ev;
-    while (loop->io_events) {
-        next_io_ev = loop->io_events->next;
-        DOOPS_FREE(loop->io_events);
-        loop->io_events = next_io_ev;
+static void _private_sleep(struct doops_loop *loop, int sleep_val) {
+    if (!loop)
+        return;
+
+#ifdef WITH_EPOLL
+    // to do
+#else
+#ifdef WITH_KQUEUE
+    // to do
+#else
+    if ((loop->max_fd) && ((loop->io_read) || (loop->io_write))) {
+        struct timeval tout;
+        tout.tv_sec = 0;
+        tout.tv_usec = 0;
+        if (sleep_val > 0) {
+            tout.tv_sec = sleep_val / 1000;
+            tout.tv_usec = (sleep_val % 1000) * 1000;
+        }
+        fd_set inlist;
+        fd_set outlist;
+        fd_set exceptlist;
+
+        // fd_set is a struct
+        inlist = loop->inlist;
+        outlist = loop->outlist;
+        exceptlist = loop->exceptlist;
+        int err = select(loop->max_fd, &inlist, &outlist, &exceptlist, &tout);
+        if (err >= 0) {
+            if (!err)
+                return;
+            int i;
+            for (i = 0; i < loop->max_fd; i ++) {
+                if (loop->io_read) {
+                    if ((FD_ISSET(i, &inlist)) || (FD_ISSET(i, &exceptlist)))
+                        loop->io_read(loop, i);
+                }
+                if (loop->io_write) {
+                    if (FD_ISSET(i, &outlist))
+                        loop->io_write(loop, i);
+                }
+            }
+        }
     }
+#endif
+#endif
+
+#ifdef _WIN32
+    Sleep(sleep_val);
+#else
+    usleep(sleep_val * 1000);
+#endif
 }
 
 static void loop_run(struct doops_loop *loop) {
@@ -207,11 +380,7 @@ static void loop_run(struct doops_loop *loop) {
         int loops = _private_loop_iterate(loop, &sleep_val);
         if ((sleep_val > 0) && (!loops) && (loop->idle) && (loop->idle(loop)))
             break;
-#ifdef _WIN32
-        Sleep(sleep_val);
-#else
-        usleep(sleep_val * 1000);
-#endif
+        _private_sleep(loop, sleep_val);
     }
     _private_loop_remove_events(loop);
     loop->quit = 1;
@@ -220,6 +389,16 @@ static void loop_run(struct doops_loop *loop) {
 static void loop_free(struct doops_loop *loop) {
     struct doops_event *next_ev;
     if (loop) {
+#if defined(WITH_EPOLL) || defined(WITH_KQUEUE)
+        if (loop->poll_fd > 0) {
+            close(loop->poll_fd);
+            loop->poll_fd = -1;
+        }
+#else
+        FD_ZERO(&loop->inlist);
+        FD_ZERO(&loop->outlist);
+        FD_ZERO(&loop->exceptlist);
+#endif
         _private_loop_remove_events(loop);
         DOOPS_FREE(loop);
     }
