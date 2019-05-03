@@ -29,6 +29,7 @@
     #include <sys/epoll.h>
 #endif
 #ifdef WITH_KQUEUE
+    #include <sys/types.h>
     #include <sys/event.h>
 #endif
 
@@ -197,7 +198,7 @@ static int loop_add_io(struct doops_loop *loop, int fd, int mode) {
 #else
 #ifdef WITH_KQUEUE
     struct kevent events[2];
-    int nume_vents = 1;
+    int num_events = 1;
     EV_SET(&events[0], fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
     if (mode) {
         EV_SET(&events[1], fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, 0);
