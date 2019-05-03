@@ -37,6 +37,7 @@ extern "C" {
 #endif
 
 #define DOOPS_MAX_SLEEP     500
+#define DOOPS_MAX_EVENTS    1024
 
 #if !defined(DOOPS_FREE) || !defined(DOOPS_MALLOC)
     #define DOOPS_MALLOC(bytes)     malloc(bytes)
@@ -188,7 +189,7 @@ static int loop_add_io(struct doops_loop *loop, int fd, int mode) {
     if (mode)
         event.events |= EPOLLOUT;
 
-    err = epoll_ctl (loop->poll_fd, EPOLL_CTL_ADD, fd, &event);
+    int err = epoll_ctl (loop->poll_fd, EPOLL_CTL_ADD, fd, &event);
     if ((err) && (errno == EEXIST))
         err = epoll_ctl (loop->poll_fd, EPOLL_CTL_MOD, fd, &event);
     if (err)
@@ -323,10 +324,43 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
         return;
 
 #ifdef WITH_EPOLL
-    // to do
+    if ((loop->poll_fd > 0) && ((loop->io_read) || (loop->io_write))) {
+        struct epoll_event events[DOOPS_MAX_EVENTS];
+        int nfds = epoll_wait(loop->poll_fd, events, DOOPS_MAX_EVENTS, sleep_val);
+        int i;
+        for (i = 0; i < nfds; i ++) {
+            if (loop->io_write) {
+                if (events[i].events & EPOLLOUT)
+                    loop->io_write(loop, events[i].data.fd);
+            }
+            if (loop->io_read) {
+                if (events[i].events ^ EPOLLOUT)
+                    loop->io_read(loop, events[i].data.fd);
+            }
+        }
+    }
 #else
 #ifdef WITH_KQUEUE
-    // to do
+    if ((loop->poll_fd > 0) && ((loop->io_read) || (loop->io_write))) {
+        struct kevent events[DOOPS_MAX_EVENTS];
+        struct timespec timeout_spec;
+        if (sleep_val > 0) {
+            timeout_spec.tv_sec = sleep_val / 1000;
+            timeout_spec.tv_nsec = (sleep_val % 1000) * 1000;
+        }
+        int events_count = kevent(loop->poll_fd, NULL, 0, events, DOOPS_MAX_EVENTS, (sleep_val > 0) ? &timeout_spec : NULL);
+        int i;
+        for (i = 0; i < events_count; i ++) {
+            if (loop->io_write) {
+                if (events[i].filter == EVFILT_WRITE)
+                    loop->io_write(loop, events[i].ident);
+            }
+            if (loop->io_read) {
+                if (events[i].filter != EVFILT_WRITE)
+                    loop->io_read(loop, events[i].ident);
+            }
+        }
+    }
 #else
     if ((loop->max_fd) && ((loop->io_read) || (loop->io_write))) {
         struct timeval tout;
