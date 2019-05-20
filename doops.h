@@ -598,7 +598,7 @@ static void loop_run(struct doops_loop *loop) {
     loop->quit = 1;
 }
 
-static void loop_free(struct doops_loop *loop) {
+static void loop_deinit(struct doops_loop *loop) {
     struct doops_event *next_ev;
     if (loop) {
 #if defined(WITH_EPOLL) || defined(WITH_KQUEUE)
@@ -622,8 +622,12 @@ static void loop_free(struct doops_loop *loop) {
             loop->io_write_block = NULL;
         }
 #endif
-        DOOPS_FREE(loop);
     }
+}
+
+static void loop_free(struct doops_loop *loop) {
+    loop_deinit(loop);
+    DOOPS_FREE(loop);
 }
 
 static int loop_event_socket(struct doops_loop *loop) {
