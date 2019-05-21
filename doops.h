@@ -30,10 +30,6 @@
     #include <sys/event.h>
 #endif
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-
 #define DOOPS_MAX_SLEEP     500
 #define DOOPS_MAX_EVENTS    1024
 
@@ -81,6 +77,46 @@ extern "C" {
 
 struct doops_loop;
 
+#ifdef __cplusplus
+    #define PRIVATE_LOOP_MAKE_ANON_FUNCTION(x, y) private_lambda_call_ ## x ## y
+    #define PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(x, y) PRIVATE_LOOP_MAKE_ANON_FUNCTION(x, y)
+
+    #define PRIVATE_LOOP_MAKE_ANON_STRUCT(x, y) private_lambda_struct_ ## x ## y
+    #define PRIVATE_LOOP_MAKE_ANON_FUNCTION_STRUCT(x, y) PRIVATE_LOOP_MAKE_ANON_STRUCT(x, y)
+
+    #define loop_code_data(loop_ptr, code, interval, userdata_ptr) { \
+        struct PRIVATE_LOOP_MAKE_ANON_STRUCT(__func__, __LINE__) { \
+            static int PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(__func__, __LINE__) (struct doops_loop *loop) { \
+                code; \
+                return 0; \
+            }; \
+        }; \
+        loop_add(loop_ptr, PRIVATE_LOOP_MAKE_ANON_STRUCT(__func__, __LINE__)::PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(__func__, __LINE__), interval, userdata_ptr); \
+    }
+
+    #define loop_on_read(loop_ptr, code) { \
+        struct PRIVATE_LOOP_MAKE_ANON_STRUCT(__func__, __LINE__) { \
+            static void PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(__func__, __LINE__) (struct doops_loop *loop, int fd) { \
+                code; \
+            }; \
+        }; \
+        if (loop_ptr) \
+            (loop_ptr)->io_read = PRIVATE_LOOP_MAKE_ANON_STRUCT(__func__, __LINE__)::PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(__func__, __LINE__); \
+    }
+
+    #define loop_on_write(loop_ptr, code) { \
+        struct PRIVATE_LOOP_MAKE_ANON_STRUCT(__func__, __LINE__) { \
+            static void PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(__func__, __LINE__) (struct doops_loop *loop, int fd) { \
+                code; \
+            }; \
+        }; \
+        if (loop_ptr) \
+            (loop_ptr)->io_write = PRIVATE_LOOP_MAKE_ANON_STRUCT(__func__, __LINE__)::PRIVATE_LOOP_MAKE_ANON_FUNCTION_NAME(__func__, __LINE__); \
+    }
+
+    #define LOOP_IS_READABLE(loop) (loop->io_read)
+    #define LOOP_IS_WRITABLE(loop) (loop->io_write)
+#else
 #ifdef __clang__
     #define WITH_BLOCKS
 
@@ -147,6 +183,7 @@ struct doops_loop;
     #else
         #pragma message ( "Code blocks are not supported by your compiler" )
     #endif
+#endif
 #endif
 
 #define loop_code(loop_ptr, code, interval) loop_code_data(loop_ptr, code, interval, NULL);
@@ -338,7 +375,7 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
         loop->max_fd = fd + 1;
 
     if ((userdata) || (loop->udata)) {
-        loop->udata = DOOPS_REALLOC(loop->udata, sizeof(void *) * loop->max_fd);
+        loop->udata = (void **)DOOPS_REALLOC(loop->udata, sizeof(void *) * loop->max_fd);
         if (loop->udata)
             loop->udata[fd] = userdata;
     }
@@ -687,9 +724,5 @@ static void *loop_event_data(struct doops_loop *loop) {
         return loop->event_data;
     return NULL;
 }
-
-#ifdef __cplusplus
-}
-#endif
 
 #endif
