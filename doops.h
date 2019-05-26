@@ -275,7 +275,7 @@ static struct doops_loop *loop_new() {
     return loop;
 }
 
-static int loop_add(struct doops_loop *loop, doop_callback callback, uint64_t interval, void *user_data) {
+static int loop_add(struct doops_loop *loop, doop_callback callback, int64_t interval, void *user_data) {
     if ((!callback) || (!loop)) {
         errno = EINVAL;
         return -1;
@@ -291,7 +291,10 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, uint64_t in
 #ifdef WITH_BLOCKS
     event_callback->event_block = NULL;
 #endif
-    event_callback->interval = interval;
+    if (interval < 0)
+        event_callback->interval = (uint64_t)(-interval);
+    else
+        event_callback->interval = (uint64_t)interval;
     event_callback->when = milliseconds() + interval;
     event_callback->user_data = user_data;
     event_callback->next = loop->events;
@@ -301,7 +304,7 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, uint64_t in
 }
 
 #ifdef WITH_BLOCKS
-static int loop_add_block(struct doops_loop *loop, doop_callback_block callback, uint64_t interval, void *user_data) {
+static int loop_add_block(struct doops_loop *loop, doop_callback_block callback, int64_t interval, void *user_data) {
     if ((!callback) || (!loop)) {
         errno = EINVAL;
         return -1;
@@ -315,7 +318,10 @@ static int loop_add_block(struct doops_loop *loop, doop_callback_block callback,
 
     event_callback->event_callback = NULL;
     event_callback->event_block = Block_copy(callback);
-    event_callback->interval = interval;
+    if (interval < 0)
+        event_callback->interval = (uint64_t)(-interval);
+    else
+        event_callback->interval = (uint64_t)interval;
     event_callback->when = milliseconds() + interval;
     event_callback->user_data = user_data;
     event_callback->next = loop->events;
