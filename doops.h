@@ -9,7 +9,9 @@
 
 #ifdef _WIN32
     #define WITH_SELECT
+    #define DOOPS_SPINLOCK_TYPE LONG
 #else
+    #define DOOPS_SPINLOCK_TYPE int
 #ifdef __linux__
     #define WITH_EPOLL
 #else
@@ -231,6 +233,7 @@ struct doops_loop {
     fd_set exceptlist;
     void **udata;
 #endif
+    DOOPS_SPINLOCK_TYPE lock;
     int event_fd;
     void *event_data;
 };
@@ -263,6 +266,29 @@ static uint64_t milliseconds() {
     return (uint64_t)(tv.tv_sec) * 1000 + (uint64_t)(tv.tv_usec) / 1000;
 }
 
+void doops_lock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
+    if (!ptr)
+        return;
+#ifdef _WIN32
+    while (InterlockedCompareExchange(ptr, 1, 0)) {
+        // wait for lock
+    }
+#else
+    while (__sync_lock_test_and_set(ptr, 1))
+        while (*ptr);
+#endif
+}
+
+void doops_unlock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
+    if (!ptr)
+        return;
+#ifdef _WIN32
+    InterlockedExchange(ptr, 0);
+#else
+    __sync_lock_release (ptr);
+#endif
+}
+
 static void loop_init(struct doops_loop *loop) {
     if (loop)
         memset(loop, 0, sizeof(struct doops_loop));
@@ -287,6 +313,7 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, int64_t int
         return -1;
     }
 
+    doops_lock(&loop->lock);
     event_callback->event_callback = callback;
 #ifdef WITH_BLOCKS
     event_callback->event_block = NULL;
@@ -300,6 +327,7 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, int64_t int
     event_callback->next = loop->events;
 
     loop->events = event_callback;
+    doops_unlock(&loop->lock);
     return 0;
 }
 
@@ -316,6 +344,7 @@ static int loop_add_block(struct doops_loop *loop, doop_callback_block callback,
         return -1;
     }
 
+    doops_lock(&loop->lock);
     event_callback->event_callback = NULL;
     event_callback->event_block = Block_copy(callback);
     if (interval < 0)
@@ -327,6 +356,7 @@ static int loop_add_block(struct doops_loop *loop, doop_callback_block callback,
     event_callback->next = loop->events;
 
     loop->events = event_callback;
+    doops_unlock(&loop->lock);
     return 0;
 }
 #endif
@@ -336,6 +366,7 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
         errno = EINVAL;
         return -1;
     }
+    doops_lock(&loop->lock);
     _private_loop_init_io(loop);
 #ifdef WITH_EPOLL
     struct epoll_event event;
@@ -349,8 +380,10 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
     int err = epoll_ctl (loop->poll_fd, EPOLL_CTL_ADD, fd, &event);
     if ((err) && (errno == EEXIST))
         err = epoll_ctl (loop->poll_fd, EPOLL_CTL_MOD, fd, &event);
-    if (err)
+    if (err) {
+        doops_unlock(&loop->lock);
         return -1;
+    }
     if ((userdata) || (loop->udata)) {
         if (fd >= loop->max_fd) {
             loop->max_fd = fd + 1;
@@ -370,6 +403,7 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
         events[1].udata = userdata;
         num_events = 2;
     }
+    doops_unlock(&loop->lock);
     return kevent(loop->poll_fd, events, num_events, NULL, 0, NULL);
 #else
     FD_SET(fd, &loop->inlist);
@@ -387,6 +421,7 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
     }
 #endif
 #endif
+    doops_unlock(&loop->lock);
     return 0;
 }
 
@@ -436,6 +471,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
     int loops = 0;
     if (sleep_val)
         *sleep_val = DOOPS_MAX_SLEEP;
+    doops_lock(&loop->lock);
     if ((loop->events) && (!loop->quit)) {
         struct doops_event *ev = loop->events;
         struct doops_event *prev_ev = NULL;
@@ -480,6 +516,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
             ev = next_ev;
         }
     }
+    doops_unlock(&loop->lock);
     return loops;
 }
 
@@ -518,6 +555,7 @@ static int loop_io(struct doops_loop *loop, doop_io_callback read_callback, doop
 
 static void _private_loop_remove_events(struct doops_loop *loop) {
     struct doops_event *next_ev;
+    doops_lock(&loop->lock);
     while (loop->events) {
         next_ev = loop->events->next;
 #ifdef WITH_BLOCKS
@@ -534,6 +572,7 @@ static void _private_loop_remove_events(struct doops_loop *loop) {
     }
     loop->max_fd = 1;
 #endif
+    doops_unlock(&loop->lock);
 }
 
 static void _private_sleep(struct doops_loop *loop, int sleep_val) {
