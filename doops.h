@@ -475,7 +475,6 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
         struct doops_event *next_ev = NULL; 
         while (ev) {
             next_ev = ev->next;
-            loop->event_data = ev->user_data;
             if (((!callback) || (callback == ev->event_callback)) && ((!user_data) || (user_data == ev->user_data))) {
                 DOOPS_FREE(ev);
                 if (prev_ev)
