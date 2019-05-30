@@ -462,6 +462,40 @@ static int loop_remove_io(struct doops_loop *loop, int fd) {
     return 0;
 }
 
+static int loop_remove(struct doops_loop *loop, doop_callback callback, void *user_data) {
+    if (!loop) {
+        errno = EINVAL;
+        return -1;
+    }
+    doops_lock(&loop->lock);
+    int removed_event = 0;
+    if ((loop->events) && (!loop->quit)) {
+        struct doops_event *ev = loop->events;
+        struct doops_event *prev_ev = NULL;
+        struct doops_event *next_ev = NULL; 
+        while (ev) {
+            next_ev = ev->next;
+            loop->event_data = ev->user_data;
+            if (((!callback) || (callback == ev->event_callback)) && ((!user_data) || (user_data == ev->user_data))) {
+                DOOPS_FREE(ev);
+                if (prev_ev)
+                    prev_ev->next = next_ev;
+                else
+                    loop->events = next_ev;
+                ev = next_ev;
+                removed_event ++;
+                if ((callback) && (user_data))
+                    break;
+                continue;
+            }
+            prev_ev = ev;
+            ev = next_ev;
+        }
+    }
+    doops_unlock(&loop->lock);
+    return removed_event;
+}
+
 static void loop_quit(struct doops_loop *loop) {
     if (loop)
         loop->quit = 1;
