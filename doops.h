@@ -194,6 +194,7 @@ struct doops_loop;
 typedef int (*doop_callback)(struct doops_loop *loop);
 typedef int (*doop_idle_callback)(struct doops_loop *loop);
 typedef void (*doop_io_callback)(struct doops_loop *loop, int fd);
+typedef void (*doop_udata_free_callback)(struct doops_loop *loop, void *ptr);
 
 #ifdef WITH_BLOCKS
     typedef int (^doop_callback_block)(struct doops_loop *loop);
@@ -217,6 +218,7 @@ struct doops_loop {
     struct doops_event *events;
     doop_io_callback io_read;
     doop_io_callback io_write;
+    doop_udata_free_callback udata_free;
 #ifdef WITH_BLOCKS
     doop_io_callback_block io_read_block;
     doop_io_callback_block io_write_block;
@@ -473,9 +475,14 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
         struct doops_event *ev = loop->events;
         struct doops_event *prev_ev = NULL;
         struct doops_event *next_ev = NULL; 
+        void *userdata = loop->event_data;
         while (ev) {
             next_ev = ev->next;
             if (((!callback) || (callback == ev->event_callback)) && ((!user_data) || (user_data == ev->user_data))) {
+                if ((loop->udata_free) && (loop->events->user_data)) {
+                    loop->event_data = loop->events->user_data;
+                    loop->udata_free(loop, loop->events->user_data);
+                }
                 DOOPS_FREE(ev);
                 if (prev_ev)
                     prev_ev->next = next_ev;
@@ -490,6 +497,47 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
             prev_ev = ev;
             ev = next_ev;
         }
+        loop->event_data = userdata;
+    }
+    doops_unlock(&loop->lock);
+    return removed_event;
+}
+
+static int loop_foreach(struct doops_loop *loop, doop_callback callback) {
+    if ((!loop) || (!callback)) {
+        errno = EINVAL;
+        return -1;
+    }
+    doops_lock(&loop->lock);
+    int removed_event = 0;
+    if ((loop->events) && (!loop->quit)) {
+        struct doops_event *ev = loop->events;
+        struct doops_event *prev_ev = NULL;
+        struct doops_event *next_ev = NULL; 
+        void *userdata = loop->event_data;
+        while (ev) {
+            next_ev = ev->next;
+            loop->event_data = ev->user_data;
+            int ret_code = callback(loop);
+            if (ret_code < 0)
+                break;
+            if (ret_code) {
+                if ((loop->udata_free) && (ev->user_data))
+                    loop->udata_free(loop, ev->user_data);
+                DOOPS_FREE(ev);
+                if (prev_ev)
+                    prev_ev->next = next_ev;
+                else
+                    loop->events = next_ev;
+                ev = next_ev;
+                removed_event ++;
+                if (ret_code != 1)
+                    continue;
+            }
+            prev_ev = ev;
+            ev = next_ev;
+        }
+        loop->event_data = userdata;
     }
     doops_unlock(&loop->lock);
     return removed_event;
@@ -525,6 +573,8 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                     remove_event = ev->event_callback(loop);
 
                 if (remove_event) {
+                    if ((loop->udata_free) && (ev->user_data))
+                        loop->udata_free(loop, ev->user_data);
 #ifdef WITH_BLOCKS
                     if (ev->event_block)
                         Block_release(ev->event_block);
@@ -591,6 +641,10 @@ static void _private_loop_remove_events(struct doops_loop *loop) {
     doops_lock(&loop->lock);
     while (loop->events) {
         next_ev = loop->events->next;
+        if ((loop->udata_free) && (loop->events->user_data)) {
+            loop->event_data = loop->events->user_data;
+            loop->udata_free(loop, loop->events->user_data);
+        }
 #ifdef WITH_BLOCKS
         if ((loop->events) && (loop->events->event_block))
             Block_release(loop->events->event_block);
