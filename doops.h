@@ -192,6 +192,7 @@ struct doops_loop;
 #define loop_schedule                       loop_code
 
 typedef int (*doop_callback)(struct doops_loop *loop);
+typedef int (*doop_foreach_callback)(struct doops_loop *loop, void *foreachdata);
 typedef int (*doop_idle_callback)(struct doops_loop *loop);
 typedef void (*doop_io_callback)(struct doops_loop *loop, int fd);
 typedef void (*doop_udata_free_callback)(struct doops_loop *loop, void *ptr);
@@ -503,7 +504,7 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
     return removed_event;
 }
 
-static int loop_foreach(struct doops_loop *loop, doop_callback callback) {
+static int loop_foreach(struct doops_loop *loop, doop_foreach_callback callback, void *foreachdata) {
     if ((!loop) || (!callback)) {
         errno = EINVAL;
         return -1;
@@ -518,7 +519,7 @@ static int loop_foreach(struct doops_loop *loop, doop_callback callback) {
         while (ev) {
             next_ev = ev->next;
             loop->event_data = ev->user_data;
-            int ret_code = callback(loop);
+            int ret_code = callback(loop, foreachdata);
             if (ret_code < 0)
                 break;
             if (ret_code) {
