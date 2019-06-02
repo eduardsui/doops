@@ -504,7 +504,7 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
     return removed_event;
 }
 
-static int loop_foreach(struct doops_loop *loop, doop_foreach_callback callback, void *foreachdata) {
+static int loop_foreach_callback(struct doops_loop *loop, void *foreachcallback, doop_foreach_callback callback, void *foreachdata) {
     if ((!loop) || (!callback)) {
         errno = EINVAL;
         return -1;
@@ -518,22 +518,28 @@ static int loop_foreach(struct doops_loop *loop, doop_foreach_callback callback,
         void *userdata = loop->event_data;
         while (ev) {
             next_ev = ev->next;
-            loop->event_data = ev->user_data;
-            int ret_code = callback(loop, foreachdata);
-            if (ret_code < 0)
-                break;
-            if (ret_code) {
-                if ((loop->udata_free) && (ev->user_data))
-                    loop->udata_free(loop, ev->user_data);
-                DOOPS_FREE(ev);
-                if (prev_ev)
-                    prev_ev->next = next_ev;
-                else
-                    loop->events = next_ev;
-                ev = next_ev;
-                removed_event ++;
-                if (ret_code != 1)
-                    continue;
+            if ((ev->event_callback == foreachcallback) || (!foreachcallback)) {
+                loop->event_data = ev->user_data;
+                int ret_code = callback(loop, foreachdata);
+                if (ret_code < 0)
+                    break;
+                if (ret_code) {
+                    if ((loop->udata_free) && (ev->user_data))
+                        loop->udata_free(loop, ev->user_data);
+#ifdef WITH_BLOCKS
+                    if (ev->event_block)
+                        Block_release(ev->event_block);
+#endif
+                    DOOPS_FREE(ev);
+                    if (prev_ev)
+                        prev_ev->next = next_ev;
+                    else
+                        loop->events = next_ev;
+                    ev = next_ev;
+                    removed_event ++;
+                    if (ret_code != 1)
+                        continue;
+                }
             }
             prev_ev = ev;
             ev = next_ev;
@@ -542,6 +548,10 @@ static int loop_foreach(struct doops_loop *loop, doop_foreach_callback callback,
     }
     doops_unlock(&loop->lock);
     return removed_event;
+}
+
+static int loop_foreach(struct doops_loop *loop, doop_foreach_callback callback, void *foreachdata) {
+    return loop_foreach_callback(loop, NULL, callback, foreachdata);
 }
 
 static void loop_quit(struct doops_loop *loop) {
