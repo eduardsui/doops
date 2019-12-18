@@ -600,7 +600,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                 }
                 while ((ev->when <= now) && (ev->interval))
                     ev->when += ev->interval;
-            } else
+            }
             if (sleep_val) {
                 int delta = (int)(ev->when - now);
                 if (delta < *sleep_val)
@@ -609,6 +609,8 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
             prev_ev = ev;
             ev = next_ev;
         }
+        if (!loop->events)
+            *sleep_val = 0;
     }
     doops_unlock(&loop->lock);
     return loops;
@@ -799,7 +801,6 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
     }
 #endif
 #endif
-
 #ifdef _WIN32
     Sleep(sleep_val);
 #else
