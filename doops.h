@@ -50,7 +50,7 @@
         #define DELTA_EPOCH_IN_MICROSECS  116444736000000000ULL
     #endif
 
-    int gettimeofday(struct timeval *tv, void *not_used) {
+    static int gettimeofday(struct timeval *tv, void *not_used) {
         FILETIME         ft;
         unsigned __int64 tmpres = 0;
 
@@ -269,7 +269,7 @@ static uint64_t milliseconds() {
     return (uint64_t)(tv.tv_sec) * 1000 + (uint64_t)(tv.tv_usec) / 1000;
 }
 
-void doops_lock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
+static void doops_lock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
     if (!ptr)
         return;
 #ifdef _WIN32
@@ -282,7 +282,7 @@ void doops_lock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
 #endif
 }
 
-void doops_unlock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
+static void doops_unlock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
     if (!ptr)
         return;
 #ifdef _WIN32
