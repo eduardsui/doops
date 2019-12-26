@@ -1,5 +1,5 @@
-#ifndef __DOOPS_H
-#define __DOOPS_H
+#ifndef DOOPS_H
+#define DOOPS_H
 
 #include <time.h>
 #include <stdlib.h>
@@ -240,7 +240,7 @@ struct doops_loop {
     int event_fd;
     void *event_data;
     struct doops_event *in_event;
-    unsigned char remove_in_event;
+    unsigned char reset_in_event;
 };
 
 static void _private_loop_init_io(struct doops_loop *loop) {
@@ -318,7 +318,8 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, int64_t int
         return -1;
     }
 
-    doops_lock(&loop->lock);
+    if (!loop->in_event)
+        doops_lock(&loop->lock);
     event_callback->event_callback = callback;
 #ifdef WITH_BLOCKS
     event_callback->event_block = NULL;
@@ -332,7 +333,10 @@ static int loop_add(struct doops_loop *loop, doop_callback callback, int64_t int
     event_callback->next = loop->events;
 
     loop->events = event_callback;
-    doops_unlock(&loop->lock);
+    if (loop->in_event)
+        loop->reset_in_event = 2;
+    else
+        doops_unlock(&loop->lock);
     return 0;
 }
 
@@ -349,7 +353,8 @@ static int loop_add_block(struct doops_loop *loop, doop_callback_block callback,
         return -1;
     }
 
-    doops_lock(&loop->lock);
+    if (!loop->in_event)
+        doops_lock(&loop->lock);
     event_callback->event_callback = NULL;
     event_callback->event_block = Block_copy(callback);
     if (interval < 0)
@@ -361,7 +366,10 @@ static int loop_add_block(struct doops_loop *loop, doop_callback_block callback,
     event_callback->next = loop->events;
 
     loop->events = event_callback;
-    doops_unlock(&loop->lock);
+    if (loop->in_event)
+        loop->reset_in_event = 2;
+    else
+        doops_unlock(&loop->lock);
     return 0;
 }
 #endif
@@ -477,8 +485,8 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
         doops_lock(&loop->lock);
         locked = 1;
     } else
-    if (!loop->remove_in_event)
-        loop->remove_in_event = 2;
+    if (!loop->reset_in_event)
+        loop->reset_in_event = 2;
     int removed_event = 0;
     if ((loop->events) && (!loop->quit)) {
         struct doops_event *ev = loop->events;
@@ -490,7 +498,7 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
             if (((!callback) || (callback == ev->event_callback)) && ((!user_data) || (user_data == ev->user_data))) {
                 if (loop->in_event == ev) {
                     // cannot delete current event, notify the loop
-                    loop->remove_in_event = 1;
+                    loop->reset_in_event = 1;
                 } else {
                     if ((loop->udata_free) && (loop->events->user_data)) {
                         loop->event_data = loop->events->user_data;
@@ -592,7 +600,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                 loop->event_data = ev->user_data;
                 int remove_event = 1;
                 loop->in_event = ev;
-                loop->remove_in_event = 0;
+                loop->reset_in_event = 0;
 #ifdef WITH_BLOCKS
                 if (ev->event_block)
                     remove_event = ev->event_block(loop);
@@ -601,7 +609,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                 if (ev->event_callback)
                     remove_event = ev->event_callback(loop);
                 // remove_event called on the current event
-                if (loop->remove_in_event) {
+                if (loop->reset_in_event) {
                     next_ev = ev->next;
                     prev_ev = NULL;
                     struct doops_event *ev_2 = loop->events;
@@ -610,9 +618,9 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                         ev_2 = ev_2->next;
                     }
 
-                    if (loop->remove_in_event == 1)
+                    if (loop->reset_in_event == 1)
                         remove_event = 1;
-                    loop->remove_in_event = 0;
+                    loop->reset_in_event = 0;
                 }
                 loop->in_event = NULL;
                 if (remove_event) {
