@@ -621,6 +621,8 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                     if (loop->reset_in_event == 1)
                         remove_event = 1;
                     loop->reset_in_event = 0;
+
+                    *sleep_val = 0;
                 }
                 loop->in_event = NULL;
                 if (remove_event) {
