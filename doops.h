@@ -238,6 +238,7 @@ struct doops_loop {
 #endif
     DOOPS_SPINLOCK_TYPE lock;
     int event_fd;
+    unsigned int io_objects;
     void *event_data;
     struct doops_event *in_event;
     unsigned char reset_in_event;
@@ -434,6 +435,7 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
     }
 #endif
 #endif
+    loop->io_objects ++;
     doops_unlock(&loop->lock);
     return 0;
 }
@@ -456,7 +458,10 @@ static int loop_remove_io(struct doops_loop *loop, int fd) {
     event.events = 0;
     if (fd == loop->max_fd - 1)
         loop->max_fd --;
-    return epoll_ctl (loop->poll_fd, EPOLL_CTL_DEL, fd, &event);
+    int err = epoll_ctl (loop->poll_fd, EPOLL_CTL_DEL, fd, &event);
+    if (!err)
+        loop->io_objects --;
+    return err;
 #else
 #ifdef WITH_KQUEUE
     struct kevent event;
@@ -472,6 +477,7 @@ static int loop_remove_io(struct doops_loop *loop, int fd) {
         loop->max_fd --;
 #endif
 #endif
+    loop->io_objects --;
     return 0;
 }
 
@@ -855,7 +861,7 @@ static void loop_run(struct doops_loop *loop) {
         return;
 
     int sleep_val;
-    while ((loop->events) && (!loop->quit)) {
+    while (((loop->events) || (loop->io_objects)) && (!loop->quit)) {
         loop->event_fd = -1;
         int loops = _private_loop_iterate(loop, &sleep_val);
         loop->event_data = NULL;
