@@ -758,7 +758,7 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
                 }
             }
         }
-    }
+    } else
 #else
 #ifdef WITH_KQUEUE
     if ((loop->poll_fd > 0) && ((LOOP_IS_READABLE(loop)) || (LOOP_IS_WRITABLE(loop)))) {
@@ -796,7 +796,7 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
                 }
             }
         }
-    }
+    } else
 #else
     if ((loop->max_fd) && ((LOOP_IS_READABLE(loop)) || (LOOP_IS_WRITABLE(loop)))) {
         struct timeval tout;
@@ -846,7 +846,7 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
                 }
             }
         }
-    }
+    } else
 #endif
 #endif
 #ifdef _WIN32
