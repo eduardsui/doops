@@ -18,7 +18,12 @@
 #if defined(__MACH__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
     #define WITH_KQUEUE
 #else
+#ifndef DOOPS_NO_IO_EVENTS
     #pragma message ( "WARNING: Cannot determine operating system. Falling back to select." )
+    #include <sys/types.h>
+    #include <unistd.h>
+    #include <sys/select.h>
+#endif
     #define WITH_SELECT
 #endif
 #endif
@@ -726,7 +731,7 @@ static void _private_loop_remove_events(struct doops_loop *loop) {
 static void _private_sleep(struct doops_loop *loop, int sleep_val) {
     if (!loop)
         return;
-
+#ifndef DOOPS_NO_IO_EVENTS
 #ifdef WITH_EPOLL
     if ((loop->poll_fd > 0) && ((LOOP_IS_READABLE(loop)) || (LOOP_IS_WRITABLE(loop)))) {
         struct epoll_event events[DOOPS_MAX_EVENTS];
@@ -849,6 +854,7 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
     } else
 #endif
 #endif
+#endif
 #ifdef _WIN32
     Sleep(sleep_val);
 #else
@@ -874,7 +880,6 @@ static void loop_run(struct doops_loop *loop) {
 }
 
 static void loop_deinit(struct doops_loop *loop) {
-    struct doops_event *next_ev;
     if (loop) {
 #if defined(WITH_EPOLL) || defined(WITH_KQUEUE)
         if (loop->poll_fd > 0) {
