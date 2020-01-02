@@ -418,7 +418,7 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
     EV_SET(&events[0], fd, EVFILT_READ, EV_ADD | EV_ENABLE, 0, 0, 0);
     events[0].udata = userdata;
     if (mode) {
-        EV_SET(&events[1], fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, 0);
+        EV_SET(&events[1], fd, EVFILT_WRITE, EV_ADD | EV_ENABLE | EV_CLEAR, 0, 0, 0);
         events[1].udata = userdata;
         num_events = 2;
     }
@@ -447,6 +447,42 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
 
 static int loop_add_io(struct doops_loop *loop, int fd, int mode) {
     return loop_add_io_data(loop, fd, mode, NULL);
+}
+
+static int loop_pause_write_io(struct doops_loop *loop, int fd) {
+    if (!loop) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef WITH_KQUEUE
+    // using EV_CLEAR instead
+    // struct kevent event;
+    // EV_SET(&event, fd, EVFILT_WRITE, EV_ADD | EV_DISABLE, 0, 0, 0);
+    // return kevent(loop->poll_fd, &event, 1, NULL, 0, NULL);
+#else
+#ifdef WITH_SELECT
+    FD_CLR(fd, &loop->outlist);
+#endif
+#endif
+    return 0;
+}
+
+static int loop_resume_write_io(struct doops_loop *loop, int fd) {
+    if (!loop) {
+        errno = EINVAL;
+        return -1;
+    }
+#ifdef WITH_KQUEUE
+    // using EV_CLEAR instead
+    // struct kevent event;
+    // EV_SET(&event, fd, EVFILT_WRITE, EV_ADD | EV_ENABLE, 0, 0, 0);
+    // return kevent(loop->poll_fd, &event, 1, NULL, 0, NULL);
+#else
+#ifdef WITH_SELECT
+    FD_SET(fd, &loop->outlist);
+#endif
+#endif
+    return 0;
 }
 
 static int loop_remove_io(struct doops_loop *loop, int fd) {
@@ -551,7 +587,7 @@ static int loop_foreach_callback(struct doops_loop *loop, void *foreachcallback,
         struct doops_event *prev_ev = NULL;
         struct doops_event *next_ev = NULL; 
         void *userdata = loop->event_data;
-        while (ev) {
+        while ((ev) && (!loop->quit)) {
             next_ev = ev->next;
             if ((ev->event_callback == foreachcallback) || (!foreachcallback)) {
                 loop->event_data = ev->user_data;
@@ -603,7 +639,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
         struct doops_event *ev = loop->events;
         struct doops_event *prev_ev = NULL;
         struct doops_event *next_ev = NULL; 
-        while (ev) {
+        while ((ev) && (!loop->quit)) {
             next_ev = ev->next;
             uint64_t now = milliseconds();
             if (ev->when <= now) {
@@ -769,11 +805,11 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
     if ((loop->poll_fd > 0) && ((LOOP_IS_READABLE(loop)) || (LOOP_IS_WRITABLE(loop)))) {
         struct kevent events[DOOPS_MAX_EVENTS];
         struct timespec timeout_spec;
-        if (sleep_val > 0) {
+        if (sleep_val >= 0) {
             timeout_spec.tv_sec = sleep_val / 1000;
             timeout_spec.tv_nsec = (sleep_val % 1000) * 1000;
         }
-        int events_count = kevent(loop->poll_fd, NULL, 0, events, DOOPS_MAX_EVENTS, (sleep_val > 0) ? &timeout_spec : NULL);
+        int events_count = kevent(loop->poll_fd, NULL, 0, events, DOOPS_MAX_EVENTS, (sleep_val >= 0) ? &timeout_spec : NULL);
         int i;
         for (i = 0; i < events_count; i ++) {
             if (LOOP_IS_WRITABLE(loop)) {
