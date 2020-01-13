@@ -257,6 +257,7 @@ struct doops_loop {
     void *event_data;
     struct doops_event *in_event;
     unsigned char reset_in_event;
+    unsigned char io_wait;
 };
 
 static void _private_loop_init_io(struct doops_loop *loop) {
@@ -317,8 +318,10 @@ static void doops_unlock(volatile DOOPS_SPINLOCK_TYPE *ptr) {
 }
 
 static void loop_init(struct doops_loop *loop) {
-    if (loop)
+    if (loop) {
         memset(loop, 0, sizeof(struct doops_loop));
+        loop->io_wait = 1;
+    }
 }
 
 static struct doops_loop *loop_new() {
@@ -1006,12 +1009,17 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
 #endif
 }
 
+static void loop_io_wait(struct doops_loop *loop, unsigned char wait) {
+    if (loop)
+        loop->io_wait = wait;
+}
+
 static void loop_run(struct doops_loop *loop) {
     if (!loop)
         return;
 
     int sleep_val;
-    while (((loop->events) || (loop->io_objects)) && (!loop->quit)) {
+    while (((loop->events) || ((loop->io_wait) && (loop->io_objects))) && (!loop->quit)) {
         loop->event_fd = -1;
         int loops = _private_loop_iterate(loop, &sleep_val);
         loop->event_data = NULL;
