@@ -15,10 +15,14 @@
 #else
     #define DOOPS_SPINLOCK_TYPE int
 #ifdef __linux__
-    #define WITH_EPOLL
+    #if !defined(WITH_POLL) && !defined(WITH_SELECT)
+        #define WITH_EPOLL
+    #endif
 #else
 #if defined(__MACH__) || defined(__APPLE__) || defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    #define WITH_KQUEUE
+    #if !defined(WITH_POLL) && !defined(WITH_SELECT)
+        #define WITH_KQUEUE
+    #endif
 #else
 #ifndef DOOPS_NO_IO_EVENTS
     #pragma message ( "WARNING: Cannot determine operating system. Falling back to select." )
@@ -39,7 +43,11 @@
     #include <sys/event.h>
 #endif
 #ifdef WITH_POLL
+#ifdef ESP32
+    #include <sys/poll.h>
+#else
     #include <poll.h>
+#endif
 #endif
 
 #define DOOPS_MAX_SLEEP     500
@@ -129,7 +137,7 @@ struct doops_loop;
     #define LOOP_IS_READABLE(loop) (loop->io_read)
     #define LOOP_IS_WRITABLE(loop) (loop->io_write)
 #else
-#ifdef __clang__
+#if defined(__clang__) && !defined(WITHOUT_BLOCKS)
     #define WITH_BLOCKS
 
     #include <Block.h>
