@@ -462,9 +462,14 @@ static int loop_add_io_data(struct doops_loop *loop, int fd, int mode, void *use
         events[num_events].udata = userdata;
         num_events ++;
     }
+    
+    int k_error = kevent(loop->poll_fd, events, num_events, NULL, 0, NULL);
+    if (!k_error)
+        loop->io_objects ++;
+
     if (locked)
         doops_unlock(&loop->lock);
-    return kevent(loop->poll_fd, events, num_events, NULL, 0, NULL);
+    return k_error;
 #else
 #ifdef WITH_POLL
     loop->fds = (struct pollfd *)DOOPS_REALLOC(loop->fds, sizeof(struct pollfd) * (loop->max_fd + 1));
@@ -650,11 +655,17 @@ static int loop_remove(struct doops_loop *loop, doop_callback callback, void *us
                 if (loop->in_event == ev) {
                     // cannot delete current event, notify the loop
                     loop->reset_in_event = 1;
+                    prev_ev = ev;
+                    ev = next_ev;
                 } else {
-                    if ((loop->udata_free) && (loop->events->user_data)) {
-                        loop->event_data = loop->events->user_data;
-                        loop->udata_free(loop, loop->events->user_data);
+                    if ((loop->udata_free) && (ev->user_data)) {
+                        loop->event_data = ev->user_data;
+                        loop->udata_free(loop, ev->user_data);
                     }
+#ifdef WITH_BLOCKS
+                    if (ev->event_block)
+                        Block_release(ev->event_block);
+#endif                    
                     DOOPS_FREE(ev);
                     if (prev_ev)
                         prev_ev->next = next_ev;
@@ -711,9 +722,11 @@ static int loop_foreach_callback(struct doops_loop *loop, void *foreachcallback,
                     else
                         loop->events = next_ev;
                     ev = next_ev;
+                    if (ev)
+                        next_ev = ev->next;
                     removed_event ++;
-                    if (ret_code != 1)
-                        continue;
+                    // if (ret_code != 1)
+                    continue;
                 }
             }
             prev_ev = ev;
@@ -773,7 +786,8 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
                         remove_event = 1;
                     loop->reset_in_event = 0;
 
-                    *sleep_val = 0;
+                    if (sleep_val)
+                        *sleep_val = 0;
                 }
                 loop->in_event = NULL;
                 if (remove_event) {
@@ -802,7 +816,7 @@ static int _private_loop_iterate(struct doops_loop *loop, int *sleep_val) {
             prev_ev = ev;
             ev = next_ev;
         }
-        if (!loop->events)
+        if ((!loop->events) && (sleep_val))
             *sleep_val = 0;
     }
     doops_unlock(&loop->lock);
@@ -829,7 +843,7 @@ static int loop_io(struct doops_loop *loop, doop_io_callback read_callback, doop
     }
     loop->io_read = read_callback;
     loop->io_write = write_callback;
-#ifdef WITH_BLOCK
+#ifdef WITH_BLOCKS
     if (loop->io_read_block) {
         Block_release(loop->io_read_block);
         loop->io_read_block = NULL;
@@ -911,7 +925,7 @@ static void _private_sleep(struct doops_loop *loop, int sleep_val) {
         struct timespec timeout_spec;
         if (sleep_val >= 0) {
             timeout_spec.tv_sec = sleep_val / 1000;
-            timeout_spec.tv_nsec = (sleep_val % 1000) * 1000;
+            timeout_spec.tv_nsec = (sleep_val % 1000) * 1000000;
         }
         int events_count = kevent(loop->poll_fd, NULL, 0, events, DOOPS_MAX_EVENTS, (sleep_val >= 0) ? &timeout_spec : NULL);
         int i;
